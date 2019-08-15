@@ -9,8 +9,6 @@
 #
 #   inputs:
 #	matrix -gziped matrix file (matrix.txt.gz) from deepTools computeMatrix function
-#	samples- samples.txt file with three columns: sampleName, description, coreNumber.
-#		sample names must be in the form: group_rep1, ex. Treat_rep1
 #	out-results directory
 #	d- the before/after value used in deepTools computetMatrix TSS
 #	binSize-the binSize used in deepTools computeMatrix TSS (the default is 10)
@@ -39,7 +37,7 @@ args
 
 ##parsing command line arguments
 matrix_file <- str_split(args[grep("matrix",args)],"=",simplify = T)[2]
-sample_file <- str_split(args[grep("samples",args)],"=",simplify = T)[2]
+#sample_file <- str_split(args[grep("samples",args)],"=",simplify = T)[2]
 out_dir <- str_split(args[grep("out",args)],"=",simplify = T)[2]
 d <- str_split(args[grep("^d",args)],"=",simplify = T)[2]
 bin_size <- str_split(args[grep("binSize",args)],"=",simplify = T)[2]
@@ -49,20 +47,19 @@ d <- as.numeric(d)
 bin_size <- as.numeric(bin_size)
 
 
-mat <- read.delim(gzfile(matrix_file),skip = 2,header = F)
+mat <- read.delim(matrix_file,skip = 1,header = F)
 values<-mat[,-c(1:6)]
 rownames(values) <- mat$V4
-header<-read.table(gzfile(matrix_file),sep=",",nrows=1,stringsAsFactors = F)
+header<-readLines(matrix_file,n=1)
 
 
 ##extract sample names from header and repeat, so that it matches the matrix
-last <- ncol(header)-19
-sample_ind<-8:last
-sample_names<-header[,sample_ind]
-sample_names$V8<-gsub("sample_labels:\\[","",sample_names$V8)
-sample_names[,ncol(sample_names)] <- gsub("\\]","",sample_names[,ncol(sample_names)])
 
-sample_names<-unlist(sample_names)
+sample_str <- gsub('.*"sample_labels":\\[(.*)\\],"downstream".*',"\\1",header)
+sample_str <- gsub('"',"",sample_str)
+sample_names <- str_split(sample_str,",") %>% unlist()
+
+
 
 ##calculate the number of times to repeat (number of bins)
 ##for each sample, computeMatrix counts the number of reads in each bin of x size, plus or minus y distance from TSS
@@ -118,34 +115,23 @@ write.csv(zero_enrich_df,file = file.path(out_dir,"number_excluded_transcripts.c
 ##calculate average enrichment across all genes
 enrichment<-lapply(filtered_norm,colMeans,na.rm = T)
 
-enrichment_df<-as.data.frame(enrichment)
+enrichment_df<-as.data.frame(enrichment,check.names = F)
 
 ##get TSS score
 TSS <- nbin/2
 TSS_score<-enrichment_df[TSS,]
 TSS_score <- round(TSS_score,1)
 
-
 TSS_score <- as.data.frame(t(TSS_score))
 colnames(TSS_score)<-"TSS_score"
 
 TSS_score$sample <- rownames(TSS_score)
 
-
-sample_info <- read.delim(sample_file, header = F, stringsAsFactors = F)
-colnames(sample_info) <- c("sample","description","coreNumber")
-
-sample_info$Group <- gsub("_rep.*","",sample_info$sample)
-
-TSS_scores <- merge(sample_info,TSS_score)
-
-
-
-p <- ggplot(TSS_scores,aes(sample,TSS_score)) +
-     geom_col(aes(fill = Group)) +
+p <- ggplot(TSS_score, aes(sample,TSS_score)) +
+	 geom_col() +
      labs(x = "Sample Name", y = "TSS enrichment score") +
      theme_bw() +
-     theme(axis.text.x = element_text(angle = 90))
+     theme(axis.text.x = element_text(angle = 45,hjust = 1))
 
 if (annotation == "hg19") {
 	p +
@@ -161,7 +147,7 @@ if (annotation == "hg19") {
 
 ggsave(file = file.path(out_dir,"TSS_scores.pdf"))
 
-write.csv(TSS_scores,file = file.path(out_dir,"TSS_scores.csv"),row.names = F)
+write.csv(TSS_score,file = file.path(out_dir,"TSS_scores.csv"),row.names = F)
 
 ######Plot enrichment
 
@@ -173,19 +159,10 @@ enrichment_df$position <- position
 
 enrichment_df_l <- gather(enrichment_df,sample,enrichment,-position)
 
-##add group and batch
-enrichment_df_l$Group <- sapply(enrichment_df_l$sample, function(x) sample_info[grep(x,sample_info$sample),"Group"])
-
-ggplot(enrichment_df_l,aes(position,enrichment)) +
-  geom_line(aes(group = sample,color = Group)) +
-  theme_bw()
-
-ggsave(file = file.path(out_dir,"enrichment_profile_by_group.pdf"))
-
 
 ###facet by sample
 ggplot(enrichment_df_l,aes(position,enrichment)) +
-  geom_line(aes(group = sample,color = Group)) +
+	geom_line() + 
   facet_wrap(~sample) +
   theme_bw()
 

@@ -9,8 +9,6 @@
 #
 # inputs:
 #	summary- the summary file generated from featureCounts of the number of reads aligning to a peak
-#	samples- tab-delimited file of samples with three columns sampleName, description and coreNumber.
-#		sample name must be in the format of "group_rep1"  ex. Treat_rep1.
 #	out- results directory
 #
 # output:
@@ -26,42 +24,35 @@
 library("tidyverse")
 args <- commandArgs()
 args
-summary_file <- str_split(args[grep("summary",args)],"=",simplify = T)[2]
-sample_file <- str_split(args[grep("samples",args)],"=",simplify = T)[2]
+summary_dir <- str_split(args[grep("summary",args)],"=",simplify = T)[2]
 out_dir <- str_split(args[grep("out",args)],"=",simplify = T)[2]
-sample_file
+
 
 ###calculate FrIP (Fragments in peaks)
-count_summary <- read.delim(summary_file,header = T,stringsAsFactors = F)
+summary_files <- list.files(path=summary_dir,pattern="summary",full.names = T)
+count_summary <- map(summary_files, ~read.delim(.x,header = T,stringsAsFactors = F,check.names = F))
 
-colnames(count_summary) <- gsub(".*Corrected_bams\\.(\\d+)[\\.-_](\\d+)[\\.-_](\\d+).*",paste("\\1","\\2","\\3",sep = "-"),colnames(count_summary))
-rownames(count_summary) <- count_summary$Status
-count_summary <- count_summary[,-1]
+count_summary <- map(count_summary,function(x) {
+colnames(x) <- basename(colnames(x)) %>% str_split(.,"_",simplify = T) %>% .[,1] 
+rownames(x) <- x$Status
+x <- x[,-1,drop = F]
+return(x)})
 
+count_summary <- do.call("cbind",count_summary)
 count_summary
-FRiP<-apply(count_summary,2,function(x) x["Assigned"]/sum(x))
+FRiP<-apply(count_summary,2,function(y) y["Assigned"]/sum(y))
 FRiP <- round(FRiP,2)
-
+FRiP
 FRiP_df <- data.frame(coreNumber = names(FRiP),FRiP = FRiP)
 
-FRiP_df
-##make a better chart, with sample Names and exp.
-sample_info <- read.delim(sample_file,stringsAsFactors = F,header = F)
-colnames(sample_info) <- c("sample","description","coreNumber")
 
-sample_info
-##add batch and group
-
-sample_info$group<-gsub("_rep.*","",sample_info$sample)
 #match by corenumber
 
-FRiP_df<-inner_join(sample_info,FRiP_df)
-FRiP_df
-ggplot(FRiP_df,aes(sample,FRiP)) +
-  geom_col(aes(fill=group)) +
-  geom_hline(yintercept = 0.2) +
+ggplot(FRiP_df,aes(coreNumber,FRiP)) +
+  geom_col() +
+  geom_hline(yintercept = 0.2,linetype = "dashed") +
   theme_bw() +
-  theme(axis.text.x = element_text(angle = 90))
+  theme(axis.text.x = element_text(angle = 45, hjust =1))
 
 
 ggsave(file = file.path(out_dir,"FRiP.pdf"))

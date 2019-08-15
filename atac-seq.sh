@@ -1,4 +1,4 @@
-##!/bin/bash
+#!/bin/bash
 
 ###fastqc
 ###trim
@@ -14,12 +14,12 @@
 
 
 ###vars
-hisat2Index=/local_storage/annotation_db//UCSC/mm10/Sequence/newHisat
-TSSref=hg19_refseq_.bed
-chromInfo=hg19_chromInfo.txt
-sampleSheet=18-015_samples.txt
+hisat2index=/local_storage/annotation_db/Mus_musculus/UCSC/mm10/Sequence/newHisat
+TSSref=mm10_refseq_all_tx.bed 
+chromInfo=mm10_chrominfo.txt
+sampleSheet=19-064_samples.txt 
 annotation=mm10
-### in alignment section change  the sed command to clean up the file names
+
 
 ###### Step 1. FastQC
 
@@ -29,7 +29,7 @@ then
 fi 
 
 
-fastqc -t 7 -o ./FastQC Raw_fastq/*gz
+fastqc -t 10 -o ./FastQC Raw_fastq/*gz
 
 
 ##### Step 2. Trim Adaptors
@@ -44,21 +44,21 @@ then
 fi
 
 #####
-for i in `ls Raw_fastq/*.gz | cut -f2 -d "/" | cut -f1-7 -d'_' | uniq`
-
+while read -r coreNumber name r1 r2
 do
 
-	echo "trimming adapter of sample $i" 
+	echo "trimming adapter of sample $coreNumber" 
 
-	trimmomatic-0.33.jar PE -threads 14 -phred33 -trimlog $outDir/${i}.log.txt \
-	Raw_fastq/${i}_1.fq.gz Raw_fastq/${i}_2.fq.gz \
-	$trimDir/${i}_1_paired_at.fq.gz $trimDir/${i}_1_Unpaired_at.q.gz \
-	$trimDir/${i}_2_paired_at.fq.gz $trimDir/${i}_2_Unpaired_at.fq.gz \
-	ILLUMINACLIP:/usr/share/Trimmomatic-0.33/adapters/NexteraPE-PE.fa:2:30:10 MINLEN:30
+	java -jar /usr/share/Trimmomatic-0.33/trimmomatic-0.33.jar PE -threads 14 -phred33 -trimlog $trimDir/${coreNumber}.log.txt \
+	Raw_fastq/${r1} Raw_fastq/${r2} \
+	$trimDir/${coreNumber}_1_paired_at.fq.gz $trimDir/${coreNumber}_1_Unpaired_at.q.gz \
+	$trimDir/${coreNumber}_2_paired_at.fq.gz $trimDir/${coreNumber}_2_Unpaired_at.fq.gz \
+ILLUMINACLIP:/usr/share/Trimmomatic-0.33/adapters/TruSeq3-PE.fa:2:30:10:3:TRUE MINLEN:10 2> ${trimDir}/${coreNumber}_trimStats.txt
 
-	echo $i trim done!
+	echo $coreNumber trim done!
 
-done
+done < ${sampleSheet}
+
 
 ##now run fastqc on trimmed files
 
@@ -72,9 +72,6 @@ then
 fi
 
 fastqc -o $fastqc_dir ${trimDir}/*fq.gz
-
-
-
 
 
 ##############Step 3. Align to genome 
@@ -96,20 +93,19 @@ then
 ln -s ${hisat2index}/genome* .
 fi
 
-for i in $(ls ./Trimmed_fastq/*.gz | cut -f3 -d '/' | sed 's/_[12]_*paired_at.fq.gz//g' | uniq) 
+for i in $(ls ${trimDir}/*gz | cut -f3 -d '/' | cut -f1 -d "_" | sort | uniq) 
 do 
-	##cleanup file names
-	sample=$(echo $i | sed 's/ATAC_|_USPD[0-9]+_[A-Z]+_L[0-9]//g' | sed 's/_/-/g')
 
+	echo aligning $i
 	hisat2 -x genome -1 $trimDir/${i}_1_paired_at.fq.gz -2 $trimDir/${i}_2_paired_at.fq.gz \
-	-p 14 --no-spliced-alignment -I 10 -X 2000 | samtools view -f2 -b - > $alignDir/${sample}.bam 2>${alignDir}/${sample}_hisat2_stderr.txt
+	-p 14 --no-spliced-alignment -I 10 -X 2000 | samtools view -b - > $alignDir/${i}.bam 2>${alignDir}/${i}_hisat2_stderr.txt
 
-	
-	samtools sort -@ 6 -m 5G -o ${alignDir}/${sample}_sorted.bam ${alignDir}/${sample}.bam
+	samtools view -b -f2 $alignDir/${i}.bam > $alignDir/${i}_properly_paired.bam
+	samtools sort -@ 6 -m 5G -o ${alignDir}/${i}_properly_paired_sorted.bam ${alignDir}/${i}.bam
 
-	samtools index ${alignDir}/${sample}_sorted.bam
+	samtools index ${alignDir}/${i}_properly_paired_sorted.bam
 	
-	rm ${alignDir}/${sample}.bam
+	rm ${alignDir}/${i}_properly_paired.bam
 
 	echo "$i alignment done!"
 
@@ -132,7 +128,7 @@ do
 
 	sample=$(echo $f | cut -f3 -d "/" | sed 's/_sorted.bam//g')
 
-	picard.jar CollectInsertSizeMetrics I=$f O=$insertDir/${sample}_insertMetrics.txt H=$insertDir/${sample}_insertHist.pdf 
+	java -jar /usr/share/picard-tools-2.2.4/picard.jar CollectInsertSizeMetrics I=$f O=$insertDir/${sample}_insertMetrics.txt H=$insertDir/${sample}_insertHist.pdf 
 
 done
 
@@ -150,33 +146,40 @@ do
 
 	sample=$(echo $f | cut -f3 -d "/" | sed 's/_sorted.bam//g')
 
-	picard.jar MarkDuplicates I=$f O=$dupDir/${sample}_marked.bam M=$dupDir/${sample}_dupInfo.txt 
+	java -jar /usr/share/picard-tools-2.2.4/picard.jar MarkDuplicates I=$f O=$dupDir/${sample}_marked.bam M=$dupDir/${sample}_dupInfo.txt 
 
 done
 
-################ Step 6. Transposition correction 
+################# Step 6. BamQC
 
 
-shifted="./Corrected_bams"
-if [ ! -d "$shifted" ]
+QC="./QC"
+if [ ! -d "$QC" ]
 then
 
-	mkdir $shifted
+	mkdir $QC
 
 fi
 
 
-for file in ${dupDir}/*marked.bam
-do
+#for file in ${dupDir}/*marked.bam
+#do
+#
+#        sample=$(echo $file | cut -f3 -d "/"| sed 's/_marked.bam//g' )
+#        echo correcting $sample
+#
+#        date +"%m/%d/%Y %H:%M:%S"
+#        atacShift.py -b $file -o ${shifted}/${sample}_corrected.bam
+#         date +"%m/%d/%Y %H:%M:%S"      
+#
+#done
 
-        sample=$(echo $file | cut -f3 -d "/"| sed 's/_marked.bam//g' )
-        echo correcting $sample
 
-        date +"%m/%d/%Y %H:%M:%S"
-        atacShift.py -b $file -o ${shifted}/${sample}_corrected.bam
-         date +"%m/%d/%Y %H:%M:%S"      
+#atacBamQC.R $dupDir $QC
 
-done
+
+
+
 
 ################### Step 7.  Calling peaks for each sample
 macs="./macs"
@@ -188,32 +191,42 @@ then
 
 fi
 
-for file in $shifted/*bam
+if [ $annotation == "hg19" ]
+then
+	genome="hs"
+elif [ $annotation == "mm10" ]
+then
+	genome="mm"
+fi
+
+
+
+for file in $dupDir/*bam
 do 
 
-        sample=$(echo $file | cut -f3 -d "/" | sed 's/_corrected.bam//g') 
+        sample=$(basename $file | cut -f1 -d "_") 
         
         echo "calling peaks for sample $sample" 
         date +"%m/%d/%Y %H:%M:%S"
-        macs2 callpeak -t $file -f BAMPE --outdir $macs/${sample}_macs -n $sample -B --SPMR  -g mm -q 0.1
+        macs2 callpeak -t $file -f BAMPE --outdir $macs/${sample}_macs -n $sample -B --SPMR  -g $genome -q 0.05
         date +"%m/%d/%Y %H:%M:%S"
 done
 
 
 
-################### Step 8. convert bedgraph to bigWigs
+################## Step 8. convert bedgraph to bigWigs
 
 #convert bedgraphs to big wig
 
-for f in $macs/*_macs/*pileup.bdg
+for file in $macs/*_macs/*pileup.bdg
 
 do
 
-echo $f
+$file
 
-sample=`echo $f | cut -f3 -d "/" | sed 's/_macs//g')`
+sample=$(basename $file | cut -f1 -d "_")
 
-sort -k1,1 -k2,2n $f > tmp.bdg
+sort -k1,1 -k2,2n $file > tmp.bdg
 
 bedGraphToBigWig tmp.bdg $chromInfo $macs/${sample}.bw
 
@@ -223,57 +236,43 @@ done
 
 
 
-##################### Step 9. Merge peaks and counting
+############## Step 9. Encode QC
 
-merged="Peak_Counts"
-
-if [ ! -d $merged ]
-then
-	mkdir $merged
-
-fi
-
-
-files=$(ls $macs/*/*narrowPeak)
-
-
-mergePeaks -matrix $merged/merged -venn $merged/merged_peaks_venn.txt $files  > $merged/merged_peaks.bed
-
-
-echo  -e "Geneid\tChr\tStart\tEnd\tStrand" > tmp
-grep -v "^#" $merged/merged_peaks.bed | awk 'BEGIN{OFS = "\t"} {print $1,$2,$3+1,$4,$5}' >> tmp
-
-mv tmp $merged/merged_peaks.saf
-
-featureCounts -f -F SAF -o $merged/peak_counts.txt -a $merged/merged_peaks.saf -p -d 10 -D 2000 ${shifted}/*bam 2> $merged/featureCounts.log
-
-
-##################### Step 10. Encode QC
-
-#### TSS enrichment
-
-QC="Encode_QC"
-
-if [ ! -d $QC ]
-then
-
-	mkdir $QC
-
-fi
 
 files=$(ls ${macs}/*bw)
-samples=$(cut -f1 $sampleSheet | tr "\r" " ")
+samples=$(for i in $files; do basename $i | cut -f1 -d "."; done)
+
 computeMatrix reference-point --referencePoint TSS \
                 -b 1000 -a 1000 -R $TSSref \
                 -S $files -out $QC/TSS_matrix.txt.gz \
                 --samplesLabel $samples
 
-
-TSS.R matrix=${QC}/TSS_matrix.txt.gz out=$QC d=1000 binSize=10 samples=$sampleSheet annotation=$annotion
-
-
-#### FRiP
+TSS.R matrix=${QC}/TSS_matrix.txt.gz out=$QC d=1000 binSize=10 samples=$sampleSheet annotation=$annotation
 
 
-##a bin size of 10 bp is the default for computeMatrix
+### FRiP
 
+counts=./counts
+if [ ! -d $counts ]
+then
+        mkdir $counts
+fi
+
+for file in ${macs}/*/*narrowPeak
+do
+
+        sample=$(basename $file | cut -f1 -d "_")
+       saf=${counts}/${sample}_peaks.saf
+       echo  -e "Geneid\tChr\tStart\tEnd\tStrand" > tmp
+       awk 'BEGIN{OFS="\t"}{print $4,$1,$2 +1,$3,$6}' $file >> tmp
+       mv tmp $saf
+
+       featureCounts -f -F SAF -o ${counts}/${sample}_counts.txt -a $saf -p -d 10 -D 2000 Marked_bams/${sample}*bam 2> ${counts}/${sample}_featureCounts.log
+
+done
+
+FRiP.R summary=$counts out=$QC
+
+
+#other QC
+./atacBamQC.R $dupDir $QC
