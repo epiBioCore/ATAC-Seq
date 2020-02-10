@@ -53,7 +53,7 @@ do
 	Raw_fastq/${r1} Raw_fastq/${r2} \
 	$trimDir/${coreNumber}_1_paired_at.fq.gz $trimDir/${coreNumber}_1_Unpaired_at.q.gz \
 	$trimDir/${coreNumber}_2_paired_at.fq.gz $trimDir/${coreNumber}_2_Unpaired_at.fq.gz \
-ILLUMINACLIP:/usr/share/Trimmomatic-0.33/adapters/TruSeq3-PE.fa:2:30:10:3:TRUE MINLEN:10 2> ${trimDir}/${coreNumber}_trimStats.txt
+ILLUMINACLIP:/usr/share/Trimmomatic-0.33/adapters/NexteraPE-PE.fa:2:30:10:3:TRUE MINLEN:10 2> ${trimDir}/${coreNumber}_trimStats.txt
 
 	echo $coreNumber trim done!
 
